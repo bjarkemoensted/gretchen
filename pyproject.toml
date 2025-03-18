@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "gretchen"
+version = "0.1.0"
+description = ""
+authors = ["bjarkemoensted <bjarkemoensted@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+requests = "^2.32.3"
+beautifulsoup4 = "^4.13.3"
+sqlalchemy = "^2.0.38"
+platformdirs = "^4.3.6"
+pandas = "^2.2.3"
+cachier = "^3.1.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
