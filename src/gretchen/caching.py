@@ -237,6 +237,14 @@ class Cache:
         self.backend = Backend(db_path=db_path, serialize=serialize, table_name=table_name)
         self.max_age_seconds = max_age_seconds
   
+    @staticmethod
+    def _shorten(val, max_chars=20) -> str:
+        res = str(val)
+        if len(res) > max_chars:
+            res = res[:max_chars] + "<...>"
+        
+        return res
+  
     def __call__(self, func: Callable):
         """This is the decorator part."""
         
@@ -260,11 +268,11 @@ class Cache:
             # Attempt to lookup cached data. If no fresh data, (re)compute results and cache
             if cached is None:
                 res = func(*args, **kwargs)
-                logging.debug(f"Cache missed - caching {res}")
+                logging.debug(f"Cache missed - caching {self._shorten(res)}")
                 self.backend[key] = res
             else:
                 res = cached
-                logging.debug(f"Cache hit: {res}")
+                logging.debug(f"Cache hit: {self._shorten(res)}")
             
             return res
         
