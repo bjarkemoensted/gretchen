@@ -5,7 +5,8 @@ from functools import wraps
 import hashlib
 import inspect
 import json
-import logging
+import logging 
+logger = logging.getLogger(__name__)
 import pandas as pd
 from pathlib import Path
 import pickle
@@ -268,11 +269,13 @@ class Cache:
             # Attempt to lookup cached data. If no fresh data, (re)compute results and cache
             if cached is None:
                 res = func(*args, **kwargs)
-                logging.debug(f"Cache missed - caching {self._shorten(res)}")
+                logger.debug(f"Cache missed - caching {self._shorten(res)}")
+                print("!!!", f"Cache missed - caching {self._shorten(res)}")
                 self.backend[key] = res
             else:
                 res = cached
-                logging.debug(f"Cache hit: {self._shorten(res)}")
+                logger.debug(f"Cache hit: {self._shorten(res)}")
+                print("!!!", f"Cache hit: {self._shorten(res)}")
             
             return res
         
