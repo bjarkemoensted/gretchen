@@ -112,14 +112,13 @@ class Backend:
             return cls._engines[url]
         #
     
-    
     def _make_cache_model(self):
         """Returns a declarative base model for the cache."""
         
         class CacheModel(self.BaseModel):
             __tablename__ = self.table_name
             key = sa.Column(sa.String, primary_key=True)
-            timestamp = sa.Column(sa.BigInteger, default=config.epoch, nullable=False)
+            timestamp = sa.Column(sa.BigInteger, nullable=False)
             expires = sa.Column(sa.BigInteger, nullable=True)
             data = sa.Column(self.column_dtype, nullable=False)
         
@@ -167,14 +166,15 @@ class Backend:
         with self.Session() as session:
             row = self.CacheModel(
                 key=key,
+                timestamp=config.epoch(),
                 data=data,
-                expires=expires
+                expires=expires,
             )
             
             session.merge(row)  # save/update row by primary key
             session.commit()
+            logger.debug(f"Saved row to cache: {key=}.")
         #
-    
     
     @stubborn
     def __getitem__(self, key):
@@ -195,17 +195,20 @@ class Backend:
             
             # Return None on missing keys
             if not hit:
+                logger.debug(f"Matched no rows with key: {key}.")
                 return None
             
+            age_seconds = config.epoch() - hit.timestamp
             # Determine staleness based on 1) specified max age and 2) expiration column, in said priority
             if max_age_seconds is None:
                 # If no max age is provided to getter, base staleness on any max age stored in the cache
                 stale = hit.expires is not None and hit.expires <= config.epoch()
             else:
                 # If a timestamp is provided, override and expiration time stored at cache time
-                stale = hit.timestamp + max_age_seconds <= config.epoch()
+                stale = age_seconds > max_age_seconds
             
             if stale:
+                logger.debug(f"Stale cache for key {key}, {hit.expires=}, {age_seconds=}, {hit.timestamp=}")
                 return None
         
         # Run loading hook to recover original data (e.g. unpickling)    
@@ -270,12 +273,10 @@ class Cache:
             if cached is None:
                 res = func(*args, **kwargs)
                 logger.debug(f"Cache missed - caching {self._shorten(res)}")
-                print("!!!", f"Cache missed - caching {self._shorten(res)}")
                 self.backend[key] = res
             else:
                 res = cached
                 logger.debug(f"Cache hit: {self._shorten(res)}")
-                print("!!!", f"Cache hit: {self._shorten(res)}")
             
             return res
         
