@@ -10,7 +10,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from gretchen.caching import Cache
-from gretchen.sql import DBMixin
+from gretchen import sql
 
 
 class FuncNodeMixin(anytree.NodeMixin):
@@ -145,25 +145,18 @@ def g(x):
     return 2*x
 
 
-class Scraper(DBMixin, Fetch):
-    def __init__(self, db_url: str, table_name_or_model: str|DeclarativeMeta, cache_kwargs: dict=None):
-        
-        # url, table name, dict?
+class Scraper(Fetch):
+    def __init__(self, name: str, db_url: str=None, cache_kwargs: dict=None):
         if cache_kwargs is None:
             cache_kwargs = dict()
         
         self.db_url = db_url
-        self.table = table_name_or_model
-        self._ensured_table_created = False
+        self.gateway = sql.Gateway(url=self.db_url, table_name=name) if db_url else None
         self.cache = Cache(**cache_kwargs)
-        super().__init__()
+        super().__init__(name=name)
     
-    @property
-    def engine(self):
-        return self.get_engine(url=self.db_url)
-    
-    def _get_model(self):
-        pass  # !!!
+    def setup_backend(self, db_url: str, table: str):
+        self.gateway = sql.Gateway(url=db_url, table_name_or_model=table)
     
     def add_scraper(self, name: str, url: str, parser: Callable):
         cache_html = self.cache(read_url)
@@ -172,20 +165,29 @@ class Scraper(DBMixin, Fetch):
         self.add_function(read_and_cache).add_function(parser, name=name)
         return self
 
+    def fetch(self):
+        data = self()
+        # url, table_name..... needed for model thingy? 
+        self.gateway.save(data)
 
 
 if __name__ == '__main__':
+    from gretchen.config import db_path
+    db_url = f'sqlite:///{db_path}'
+    
     from gretchen import logger as pkglog
     logging.basicConfig(level=logging.ERROR)
     pkglog.setLevel(logging.DEBUG)
-    logger.debug("fuck off")
     
     url="https://pommier-furniture.com/product/mosso-solid-wood-armchair/"
     url2 = "https://pommier-furniture.com/product/otto-solid-wood-chair/"
     
     
-    scrape = Scraper()
-    scrape.add_scraper(
+    scraper = Scraper(
+        name="pommier",
+        db_url=db_url
+    )
+    scraper.add_scraper(
         name="cotto",
         url="https://pommier-furniture.com/product/mosso-solid-wood-armchair/",
         parser=parse_cp
@@ -195,12 +197,10 @@ if __name__ == '__main__':
         parser=parse_cp
     )
     
-    d = scrape()
+    d = scraper()
     print(d)
     
-    print(scrape)
+    print(scraper)
     
-    fp = functools.partial(read_url, url)
-    
-    f1 = functools.partial(f, a=2)
-    f2 = functools.partial(f1, b=2)
+    res = scraper.fetch()
+    print(res)

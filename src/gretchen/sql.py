@@ -1,3 +1,5 @@
+import logging 
+logger = logging.getLogger(__name__)
 import pandas as pd
 import sqlalchemy as sa
 from sqlalchemy.orm import declarative_base, Mapped, sessionmaker
@@ -10,19 +12,26 @@ from gretchen.config import db_path
 Base = declarative_base()
 
 
-def make_sql_columns_from_dict(d: dict) -> dict:
-    """Takes a dict mapping names to values.
-    Returns a similar dict mapping names to an appropriate SQLAlchemy column type, in addition
-    to columns for id and timestamp for storing data."""
-
+def _make_sql_columns_from_types(**kwargs):
     res = dict(
         id = sa.Column(sa.Integer, primary_key=True, autoincrement=True),
         timestamp = sa.Column(sa.DateTime, default=sa.func.now(), nullable=False)
     )
-    for k, v in d.items():
-        col = Mapped[type(v)]
-        res[k] = col
+    for name, type_ in kwargs.items():
+        assert isinstance(type_, type)
+        col = Mapped[type_]
+        res[name] = col
     
+    return res
+
+
+def make_sql_columns_from_values_dict(d: dict) -> dict:
+    """Takes a dict mapping names to values.
+    Returns a similar dict mapping names to an appropriate SQLAlchemy column type, in addition
+    to columns for id and timestamp for storing data."""
+    
+    d = {name: type(value) for name, value in d.items()}
+    res = _make_sql_columns_from_types(**d)
     return res
 
 
@@ -45,11 +54,11 @@ def make_model(Base: DeclarativeMeta, table_name: str, **columns):
     return model
 
 
-class DBMixin:
+class engine_manager:
     """Helper class for creating connection engines, or reusing if an engine has already been
     created for a given URL"""
     
-    _lock = RLock()  # Just make sure threading doesn't cause problems
+    _lock = RLock()  # Just to make sure threading doesn't cause problems
     _engines = dict()
 
     @classmethod
@@ -58,6 +67,7 @@ class DBMixin:
         with cls._lock:
             if url not in cls._engines:
                 cls._engines[url] = sa.create_engine(url)
+                logger.debug(f"Created engine for {url}.")
             return cls._engines[url]
         #
 
@@ -82,56 +92,50 @@ class DBMixin:
     #
 
 
-class Gateway(DBMixin):
+class Gateway:
     """Handles engines and autogeneration of data models for saving scraped stuff."""
 
-    def __init__(self, url: str, table_name_or_model: str|DeclarativeMeta):
+    def __init__(self, url: str, table_name: str):
         """url is the URL for the DB
         table_name_or_model can be a table name (str) or ORM data model class. (declarative_base() subclass)"""
 
         self.url = url
-        if isinstance(table_name_or_model, DeclarativeMeta):
-            self._model = table_name_or_model
-            self.table_name = self._model.__table__
-            self._ensure_table_exists()
-        elif isinstance(table_name_or_model, str):
-            self._model = None
-            self.table_name = table_name_or_model
-        else:
-            raise TypeError
+        self.table_name = table_name
         
         self._base = declarative_base()  # setup a base thingy to be used if we need to autogenerate a model
+        self._checked_models = set([])
         self._Session = None
-        self._model = None
     
     @property
     def engine(self) -> sa.Engine:
-        return self.get_engine(self.url)
+        return engine_manager.get_engine(self.url)
     
     @property
-    def Session(self, *args, **kwargs):
+    def Session(self):
         if not self._Session:
             self._Session = sessionmaker(bind=self.engine)
-        return self._Session(*args, **kwargs)
+        return self._Session
     
-    def _ensure_table_exists(self):
-        self._model.metadata.create_all(self.engine)
+    def _check_model(self, model: DeclarativeMeta, only_once=True):
+        """Helper method for ensuring that a table has been created. Might check columns in the future"""
+        
+        if only_once and model in self._checked_models:
+            return
+        
+        logger.debug(f"Checking table {model.__tablename__} is setup at {self.url}")
+        model.metadata.create_all(self.engine)
+        self._checked_models.add(model)
     
     def _get_model(self, data: dict):
         """Given a dictionary of data, returns a model for storing the data.
-        If a model was provided at instantiation, that model is returned.
-        Otherwise, an appropriate model is inferred from the provided data."""
+        An appropriate model is inferred from the provided data."""
         
-        # Check if a model was provided when instantiating the class
-        if self._model:
-            return self._model
+        columns = make_sql_columns_from_values_dict(data)
+        model = make_model(Base=self._base, table_name=self.table_name, **columns)
         
-        columns = make_sql_columns_from_dict(data)
-        self._model = make_model(Base=self._base, table_name=self.table_name_or_model, **columns)
+        self._check_model(model=model)
         
-        self._ensure_table_exists()
-        
-        return self._model
+        return model
 
     def save(self, data: dict):
         model = self._get_model(data=data)
@@ -145,7 +149,6 @@ class Gateway(DBMixin):
         """Returns a dataframe containing the top <limit> rows in the cache.
         Defaults to all rows."""
         
-        # TODO consider collecting all this functionality (handling engines, reading contents etc) into this Mixin and reuse in Cache!!!
         metadata = sa.MetaData()
         table = sa.Table(self.table_name, metadata, autoload_with=self.engine)
 
