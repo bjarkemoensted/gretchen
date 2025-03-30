@@ -15,7 +15,7 @@ from gretchen.caching import Cache
 from gretchen import sql
 
 
-DEFAULT_UPDATE_FREQUENCY_SECONDS = datetime.timedelta(days=1).seconds
+DEFAULT_UPDATE_FREQUENCY_SECONDS = int(datetime.timedelta(days=1).total_seconds())
 
 
 class FuncNodeMixin(anytree.NodeMixin):
@@ -167,13 +167,16 @@ class Task:
     
     def __call__(self):
         age = self.table_gateway.seconds_since_last_update()
+        needs_update = age is None or age >= self.frequency_seconds
         
-        if age < self.frequency_seconds:
+        logger.debug(f"Age: {age}. {needs_update=}")
+        if needs_update:
+            logger.debug(f"{repr(self.table_gateway)} updating...")
+            data = self.scraper()
+            self.table_gateway.save(data)
+        else:
             logger.debug(f"{repr(self.table_gateway)} was recently updated. Skipping...")
-            return
-        
-        data = self.scraper()
-        self.table_gateway.save(data)
+            return        
     #
 
 
@@ -197,7 +200,9 @@ class Fetch:
         
         freq = self.default_frequency if frequency is None else frequency
         freq = DEFAULT_UPDATE_FREQUENCY_SECONDS if freq is None else freq
+        logger.debug(f"Got {freq} from {frequency} {self.default_frequency}")
         freq = self._to_seconds(freq)
+        
         
         
         table_gateway = self.gateway.add_table(table_name=table_name)
@@ -244,3 +249,4 @@ if __name__ == '__main__':
     
     job.fetch()
     
+    print(job.gateway["pommier"].contents())

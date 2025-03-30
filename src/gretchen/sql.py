@@ -109,6 +109,7 @@ class TableGateway:
             )
             
             if not self.table_exists():
+                # TODO handle cases where columns do not match
                 self._model.__table__.create(self.db_gateway.engine, checkfirst=True)
             #
 
@@ -162,8 +163,11 @@ class TableGateway:
         )
         return table
     
-    def seconds_since_last_update(self):
-        table = self._table()
+    def seconds_since_last_update(self) -> int|None:
+        try:
+            table = self._table()
+        except sa.exc.NoSuchTableError:
+            return None
         
         # Execute the query
         with self.db_gateway.engine.connect() as connection:
@@ -175,7 +179,6 @@ class TableGateway:
         res = age.seconds
 
         return res
-
 
 
 class DatabaseGateway:
@@ -190,7 +193,6 @@ class DatabaseGateway:
 
         self.url = url
         self.Base = declarative_base()  # setup a base thingy to be used if we need to autogenerate a model
-        self._checked_models = set([])  # REMOVE!!!!!
         self._Session = None
         self._tables = dict()
         self._engine = None
@@ -252,12 +254,11 @@ if __name__ == '__main__':
     
     db_gateway = DatabaseGateway(url=db_url, echo=False)
     
-    s = "hmm"
+    s = "pommier"
     t = db_gateway.add_table(s)
     
-    t.drop()
     df = t.contents()
-    #print(df)
+    print(df)
     
     
     d = dict(a=42, b="foo")
