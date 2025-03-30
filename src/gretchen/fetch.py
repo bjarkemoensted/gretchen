@@ -1,16 +1,21 @@
 import anytree
 from bs4 import BeautifulSoup
+from dataclasses import dataclass
+import datetime
 import functools
 import re
 import requests
 from sqlalchemy.orm.decl_api import DeclarativeMeta
-from typing import Callable
+from typing import Callable, Optional
 
 import logging 
 logger = logging.getLogger(__name__)
 
 from gretchen.caching import Cache
 from gretchen import sql
+
+
+DEFAULT_UPDATE_FREQUENCY_SECONDS = datetime.timedelta(days=1).seconds
 
 
 class FuncNodeMixin(anytree.NodeMixin):
@@ -49,7 +54,7 @@ def _infer_callable_name(f: Callable|None) -> str|None:
     return None
 
 
-class Fetch(FuncNodeMixin):
+class FuncNode(FuncNodeMixin):
     
     def __init__(self, func: Callable=None, name: str=None, parent=None):
         self.func = func
@@ -63,7 +68,7 @@ class Fetch(FuncNodeMixin):
         self.parent = parent
 
     def add_function(self, func: Callable, name=None):
-        f = Fetch(func, name=name, parent=self)
+        f = FuncNode(func, name=name, parent=self)
         return f
 
 
@@ -134,50 +139,78 @@ def read_url(url: str):
     return res
 
 
-
-def f(a, b=42):
-    print(f"Got {a=}, {b=}")
-    return a + b
-
-
-def g(x):
-    print(f"Got {x=}")
-    return 2*x
-
-
-class Scraper(DBMixin, Fetch):
-    def __init__(self, db_url: str, table_name_or_model: str|DeclarativeMeta, cache_kwargs: dict=None):
+class Scraper(FuncNode):
+    def __init__(self, cache_kwargs: dict=None, name=None):
         
         # url, table name, dict?
         if cache_kwargs is None:
             cache_kwargs = dict()
         
-        self.db_url = db_url
-        self.table = table_name_or_model
-        self._ensured_table_created = False
         self.cache = Cache(**cache_kwargs)
-        super().__init__()
-    
-    @property
-    def engine(self):
-        return self.get_engine(url=self.db_url)
-    
-    def _get_model(self):
-        pass  # !!!
+        super().__init__(name=name)
     
     def add_scraper(self, name: str, url: str, parser: Callable):
         cache_html = self.cache(read_url)
         read_and_cache = functools.partial(cache_html, url)
         
-        f = lambda: parser(read_and_cache())
-        self.scrapers[name] = f
+        self.add_function(read_and_cache).add_function(parser, name=name)
         
         return self
+    #
+
+
+@dataclass
+class Task:
+    scraper: Callable
+    table_gateway: sql.TableGateway
+    frequency_seconds: Optional[int] = DEFAULT_UPDATE_FREQUENCY_SECONDS
+    
+    def __call__(self):
+        age = self.table_gateway.seconds_since_last_update()
+        
+        if age < self.frequency_seconds:
+            logger.debug(f"{repr(self.table_gateway)} was recently updated. Skipping...")
+            return
+        
+        data = self.scraper()
+        self.table_gateway.save(data)
+    #
+
+
+class Fetch:
+    @staticmethod
+    def _to_seconds(t: int|datetime.timedelta):
+        if isinstance(t, datetime.timedelta):
+            return t.seconds
+        return t
+
+    def __init__(self, db_url: str, frequency: int|datetime.timedelta=None):
+        self.default_frequency = self._to_seconds(frequency) if frequency is not None else frequency
+        self.db_url = db_url
+        self.tasks = []
+        self.gateway = sql.DatabaseGateway(url=self.db_url)
+    
+    def register_scraper(self, scraper: Callable, table_name: str, frequency: int|datetime.timedelta=None):
+            
+        if any(task.table_name for task in self.tasks):
+            raise RuntimeError(f"Table {table_name} already linked to scraper {repr(self.scrapers[table_name])}")
+        
+        freq = self.default_frequency if frequency is None else frequency
+        freq = DEFAULT_UPDATE_FREQUENCY_SECONDS if freq is None else freq
+        freq = self._to_seconds(freq)
+        
+        
+        table_gateway = self.gateway.add_table(table_name=table_name)
+        task = Task(
+            scraper=scraper,
+            table_gateway=table_gateway,
+            frequency_seconds=freq)
+        
+        self.tasks.append(task)
 
     def fetch(self):
-        data = self()
-        # url, table_name..... needed for model thingy? 
-        self.gateway.save(data)
+        for task in self.tasks:
+            task()
 
 
 if __name__ == '__main__':
@@ -187,15 +220,13 @@ if __name__ == '__main__':
     from gretchen import logger as pkglog
     logging.basicConfig(level=logging.ERROR)
     pkglog.setLevel(logging.DEBUG)
+    logger.setLevel(logging.DEBUG)
     
     url="https://pommier-furniture.com/product/mosso-solid-wood-armchair/"
     url2 = "https://pommier-furniture.com/product/otto-solid-wood-chair/"
     
     
-    scraper = Scraper(
-        name="pommier",
-        db_url=db_url
-    )
+    scraper = Scraper()
     scraper.add_scraper(
         name="cotto",
         url="https://pommier-furniture.com/product/mosso-solid-wood-armchair/",
@@ -207,9 +238,9 @@ if __name__ == '__main__':
     )
     
     d = scraper()
-    print(d)
     
-    print(scraper)
+    job = Fetch(db_url=db_url)
+    job.register_scraper(scraper=scraper, table_name="pommier")
     
-    res = scraper.fetch()
-    print(res)
+    job.fetch()
+    
